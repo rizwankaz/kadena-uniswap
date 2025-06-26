@@ -1,6 +1,6 @@
 (namespace "uniswap")
 
-(module pool-TEMPLATE 'admin-keyset
+(module pool-kdx 'admin-keyset
   (defconst FEE:decimal 0.003)
 
   (defschema pool-state
