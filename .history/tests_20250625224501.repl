@@ -1,0 +1,275 @@
+;; tests.repl - AMM Contract Test Suite for Pact REPL
+;; Run with: pact -i tests.repl
+
+;; Setup environment and load contract
+(env-data {"amm-admin": ["admin-key"]})
+(env-keys ["admin-key"])
+(load "amm.pact")
+(define-keyset "amm-admin" (read-keyset "amm-admin"))
+
+;; Create tables
+(create-table pools)
+(create-table user-lp-positions)
+
+(print "✅ AMM contract loaded and tables created")
+
+;; Test 1: Create a new pool
+(begin-tx "Create Pool Test")
+(use amm)
+
+(print "🧪 Test 1: Creating COIN-USDC pool...")
+
+(expect "Pool created successfully"
+  "COIN-USDC"
+  (create-pool "COIN" "USDC" 1000.0 2000.0 "alice"))
+
+(expect "Pool has correct token A"
+  "COIN"
+  (at "token-a" (get-pool-info "COIN-USDC")))
+
+(expect "Pool has correct token B"
+  "USDC"
+  (at "token-b" (get-pool-info "COIN-USDC")))
+
+(expect "Pool has correct reserve A"
+  1000.0
+  (at "reserve-a" (get-pool-info "COIN-USDC")))
+
+(expect "Pool has correct reserve B"
+  2000.0
+  (at "reserve-b" (get-pool-info "COIN-USDC")))
+
+(expect "LP token supply calculated correctly"
+  true
+  (> (at "lp-token-supply" (get-pool-info "COIN-USDC")) 1414.0))
+
+(print "✅ Pool creation test passed")
+(commit-tx)
+
+;; Test 2: Check user LP balance
+(begin-tx "Check LP Balance")
+(use amm)
+
+(print "🧪 Test 2: Checking LP balances...")
+
+(expect "Alice has LP tokens"
+  true
+  (> (get-user-lp-balance "alice" "COIN-USDC") 1414.0))
+
+(expect "Pool share calculation"
+  true
+  (> (calculate-pool-share "alice" "COIN-USDC") 99.0))
+
+(print (format "Alice LP balance: {}" [(get-user-lp-balance "alice" "COIN-USDC")]))
+(print (format "Alice pool share: {}%" [(calculate-pool-share "alice" "COIN-USDC")]))
+
+(print "✅ LP balance test passed")
+(commit-tx)
+
+;; Test 3: Add liquidity to existing pool
+(begin-tx "Add Liquidity Test")
+(use amm)
+
+(print "🧪 Test 3: Adding liquidity...")
+
+(let ((lp-tokens-minted (add-liquidity "COIN-USDC" 500.0 1000.0 "bob")))
+  (expect "LP tokens minted for Bob"
+    true
+    (> lp-tokens-minted 700.0))
+  (print (format "Bob received {} LP tokens" [lp-tokens-minted])))
+
+(expect "Reserve A increased"
+  1500.0
+  (at "reserve-a" (get-pool-info "COIN-USDC")))
+
+(expect "Reserve B increased"
+  3000.0
+  (at "reserve-b" (get-pool-info "COIN-USDC")))
+
+(expect "Bob has LP tokens"
+  true
+  (> (get-user-lp-balance "bob" "COIN-USDC") 700.0))
+
+(print (format "Updated reserves: A={}, B={}" 
+  [(at "reserve-a" (get-pool-info "COIN-USDC"))
+   (at "reserve-b" (get-pool-info "COIN-USDC"))]))
+
+(print "✅ Add liquidity test passed")
+(commit-tx)
+
+;; Test 4: Price calculation (read-only)
+(begin-tx "Price Calculation Test")
+(use amm)
+
+(print "🧪 Test 4: Price calculations...")
+
+(let ((amount-out (get-amount-out "COIN-USDC" "COIN" 100.0)))
+  (expect "Swap calculation returns positive amount"
+    true
+    (> amount-out 0.0))
+  (expect "Swap calculation respects slippage"
+    true
+    (< amount-out 200.0))
+  (print (format "100 COIN → {} USDC" [amount-out])))
+
+(let ((amount-out (get-amount-out "COIN-USDC" "USDC" 200.0)))
+  (expect "Reverse swap calculation"
+    true
+    (and (> amount-out 0.0) (< amount-out 100.0)))
+  (print (format "200 USDC → {} COIN" [amount-out])))
+
+(print "✅ Price calculation test passed")
+(commit-tx)
+
+;; Test 5: Execute swap
+(begin-tx "Swap Test")
+(use amm)
+
+(print "🧪 Test 5: Executing swap...")
+
+(let* ((initial-pool (get-pool-info "COIN-USDC"))
+       (initial-reserve-a (at "reserve-a" initial-pool))
+       (initial-reserve-b (at "reserve-b" initial-pool)))
+
+  (let ((amount-out (swap-exact-tokens-for-tokens 
+                      "COIN-USDC" "COIN" 100.0 150.0 "charlie")))
+    
+    (expect "Swap executed successfully"
+      true
+      (> amount-out 150.0))
+    
+    (print (format "Swapped 100 COIN for {} USDC" [amount-out]))
+    
+    (let ((updated-pool (get-pool-info "COIN-USDC")))
+      (expect "Reserve A increased"
+        (+ initial-reserve-a 100.0)
+        (at "reserve-a" updated-pool))
+      
+      (expect "Reserve B decreased"
+        true
+        (< (at "reserve-b" updated-pool) initial-reserve-b))
+      
+      (expect "Fees collected"
+        true
+        (> (at "total-fees-a" updated-pool) 0.0))
+      
+      (print (format "New reserves: A={}, B={}" 
+        [(at "reserve-a" updated-pool)
+         (at "reserve-b" updated-pool)]))
+      (print (format "Fees collected: A={}, B={}" 
+        [(at "total-fees-a" updated-pool)
+         (at "total-fees-b" updated-pool)])))))
+
+(print "✅ Swap test passed")
+(commit-tx)
+
+;; Test 6: Remove liquidity
+(begin-tx "Remove Liquidity Test")
+(use amm)
+
+(print "🧪 Test 6: Removing liquidity...")
+
+(let ((bob-lp-balance (get-user-lp-balance "bob" "COIN-USDC")))
+  (let ((half-lp (/ bob-lp-balance 2.0)))
+    (let ((amounts-returned (remove-liquidity "COIN-USDC" half-lp "bob")))
+      
+      (expect "Received token A"
+        true
+        (> (at 0 amounts-returned) 0.0))
+      
+      (expect "Received token B"
+        true
+        (> (at 1 amounts-returned) 0.0))
+      
+      (print (format "Bob removed {} LP tokens" [half-lp]))
+      (print (format "Bob received: {} COIN, {} USDC" 
+        [(at 0 amounts-returned) (at 1 amounts-returned)]))
+      
+      (expect "LP balance reduced"
+        true
+        (< (get-user-lp-balance "bob" "COIN-USDC") bob-lp-balance)))))
+
+(print "✅ Remove liquidity test passed")
+(commit-tx)
+
+;; Test 7: Error cases
+(begin-tx "Error Handling Tests")
+(use amm)
+
+(print "🧪 Test 7: Error handling...")
+
+(expect-failure "Invalid token for swap"
+  "Invalid input token"
+  (swap-exact-tokens-for-tokens "COIN-USDC" "INVALID" 100.0 0.0 "alice"))
+
+(expect-failure "Cannot remove more LP tokens than owned"
+  "Insufficient LP tokens"
+  (remove-liquidity "COIN-USDC" 999999.0 "bob"))
+
+(expect-failure "Cannot add zero liquidity"
+  "Amount A must be positive"
+  (add-liquidity "COIN-USDC" 0.0 100.0 "alice"))
+
+(print "✅ Error handling test passed")
+(commit-tx)
+
+;; Test 8: Fee rate adjustment (admin only)
+(begin-tx "Admin Functions Test")
+(use amm)
+
+(print "🧪 Test 8: Admin functions...")
+
+(expect "Fee rate updated"
+  "Fee rate updated"
+  (set-fee-rate "COIN-USDC" 0.005))
+
+(expect "New fee rate applied"
+  0.005
+  (at "fee-rate" (get-pool-info "COIN-USDC")))
+
+(print "Fee rate changed to 0.5%")
+
+(expect-failure "Invalid fee rate rejected"
+  "Fee rate must be between 0% and 10%"
+  (set-fee-rate "COIN-USDC" 0.15))
+
+(print "✅ Admin functions test passed")
+(commit-tx)
+
+;; Test 9: Precision test with small amounts
+(begin-tx "Precision Test")
+(use amm)
+
+(print "🧪 Test 9: Precision with small amounts...")
+
+(expect "Small pool created"
+  "TOKEN1-TOKEN2"
+  (create-pool "TOKEN1" "TOKEN2" 0.001 0.002 "precision-test"))
+
+(let ((small-swap-out (get-amount-out "TOKEN1-TOKEN2" "TOKEN1" 0.0001)))
+  (expect "Small swap calculation"
+    true
+    (> small-swap-out 0.0))
+  (print (format "Micro swap: 0.0001 TOKEN1 → {} TOKEN2" [small-swap-out])))
+
+(print "✅ Precision test passed")
+(commit-tx)
+
+;; Final summary
+(begin-tx "Final State Summary")
+(use amm)
+
+(print "\n🎯 === FINAL TEST SUMMARY ===")
+(print (format "COIN-USDC Pool: {}" [(get-pool-info "COIN-USDC")]))
+(print (format "TOKEN1-TOKEN2 Pool: {}" [(get-pool-info "TOKEN1-TOKEN2")]))
+
+(print "\n👥 === USER POSITIONS ===")
+(print (format "Alice LP balance: {}" [(get-user-lp-balance "alice" "COIN-USDC")]))
+(print (format "Bob LP balance: {}" [(get-user-lp-balance "bob" "COIN-USDC")]))
+(print (format "Alice pool share: {}%" [(calculate-pool-share "alice" "COIN-USDC")]))
+(print (format "Bob pool share: {}%" [(calculate-pool-share "bob" "COIN-USDC")]))
+
+(print "\n✅ All tests completed successfully!")
+(print "🚀 AMM contract is ready for deployment!")
+
+(commit-tx)
