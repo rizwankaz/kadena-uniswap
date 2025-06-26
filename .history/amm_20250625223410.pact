@@ -65,6 +65,20 @@
       "Return the maximum of two decimal values"
       (if (> a b) a b))
   
+    (defun sqrt:decimal (x:decimal)
+      "Calculate square root using Newton's method (iterative)"
+      (if (<= x 0.0) 0.0
+          (if (= x 1.0) 1.0
+              ;; Use a simple approximation that works well for AMM calculations
+              ;; For the range we typically need (product of reserves), this is sufficient
+              (let* ((initial-guess (/ x 2.0))
+                     (iteration1 (/ (+ initial-guess (/ x initial-guess)) 2.0))
+                     (iteration2 (/ (+ iteration1 (/ x iteration1)) 2.0))
+                     (iteration3 (/ (+ iteration2 (/ x iteration2)) 2.0))
+                     (iteration4 (/ (+ iteration3 (/ x iteration3)) 2.0))
+                     (iteration5 (/ (+ iteration4 (/ x iteration4)) 2.0)))
+                iteration5))))
+  
     ;; Core AMM functions
     (defun create-pool:string 
       (token-a:string 
